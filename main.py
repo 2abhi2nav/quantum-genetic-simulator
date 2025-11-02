@@ -2,17 +2,17 @@ import numpy as np
 import random
 from qiskit import QuantumCircuit
 from qiskit_aer import Aer
-from monte_carlo_simulation import CropPerformanceSimulator
+from simulation_engine import CropPerformanceSimulator
 
 # --- 1. SHARED ALGORITHM HYPERPARAMETERS ---
 NUM_GENES = 20
 POPULATION_SIZE = 30 # Set to 30 for both algorithms
 NUM_GENERATIONS = 15 # Set to 15 for both algorithms
 
-# --- 2. HQGA (QUANTUM SIMULATION) SECTION (ORIGINAL LOGIC) ---
+# --- 2. HQGA (QUANTUM SIMULATION) SECTION (IMPROVED) ---
 
-# HQGA-specific parameters
-ROTATION_RATE = 0.1 * np.pi
+# HQGA-specific parameters are now inside its run function for clarity
+# ROTATION_RATE = 0.1 * np.pi # Replaced by adaptive rate
 
 def initialize_population_hqga():
     population = []
@@ -59,42 +59,86 @@ def get_best_solution_hqga(population, quantum_simulator, crop_simulator):
                 best_solution = bitstring
     return best_solution, best_fitness
 
-def update_population_hqga(population, best_overall_solution):
+# Added 'rotation_rate' parameter
+def update_population_hqga(population, best_overall_solution, rotation_rate):
     for circuit in population:
         for i in range(NUM_GENES):
             if best_overall_solution[i] == '1':
-                circuit.ry(ROTATION_RATE, i)
+                # Use the new adaptive rate
+                circuit.ry(rotation_rate, i)
             else:
-                circuit.ry(-ROTATION_RATE, i)
+                circuit.ry(-rotation_rate, i)
     return population
 
+# Improvement 1
+def diversify_population(population, reset_fraction=0.3):
+    """
+    Resets a fraction of the population back to full superposition
+    to prevent premature convergence and introduce new diversity.
+    """
+    num_to_reset = int(len(population) * reset_fraction)
+    # Get a random sample of individuals to reset
+    indices_to_reset = random.sample(range(len(population)), num_to_reset)
+    
+    print(f"--- Diversification triggered: Resetting {num_to_reset} individuals ---")
+    
+    for index in indices_to_reset:
+        # Create a new, fresh individual
+        new_circuit = QuantumCircuit(NUM_GENES)
+        new_circuit.h(range(NUM_GENES))
+        population[index] = new_circuit
+        
+    return population
+
+# Main HQGA loop now includes diversification
 def run_hqga_simulation(crop_simulator):
     print("--- 1. Running HQGA Simulation ---")
+    
+    # Adaptive rotation rate starts high and decays
+    INITIAL_ROTATION_RATE = 0.2 * np.pi 
     
     quantum_simulator = Aer.get_backend('aer_simulator')
     quantum_population = initialize_population_hqga()
     print(f"Initialized a population of {POPULATION_SIZE} quantum individuals.")
     
     global_best_fitness = -1
+    global_best_solution = "0" * NUM_GENES # Store the best-ever solution (elitism)
+    
+    # Stagnation counter for diversification
+    generations_without_improvement = 0
     
     for generation in range(NUM_GENERATIONS):
+        
+        # ADAPTIVE ROTATION RATE
+        # Rate decreases over generations for fine-tuning
+        decay_factor = (1 - (generation / NUM_GENERATIONS))
+        current_rotation_rate = (INITIAL_ROTATION_RATE * decay_factor) + (0.01 * np.pi) # minimum rate
+        
         fitness_scores = evaluate_population_hqga(quantum_population, quantum_simulator, crop_simulator)
         
         current_best_solution, current_best_fitness = get_best_solution_hqga(quantum_population, quantum_simulator, crop_simulator)
         
+        # --- 2. DIVERSIFICATION (STALL CHECK) ---
         if current_best_fitness > global_best_fitness:
             global_best_fitness = current_best_fitness
-        
+            global_best_solution = current_best_solution
+            generations_without_improvement = 0 
+        else:
+            generations_without_improvement += 1
+
         print(f"Generation {generation+1}/{NUM_GENERATIONS} | Best Avg Fitness in Pop: {np.max(fitness_scores):.2f} | Overall Best Score: {global_best_fitness:.2f}")
+
+        # If stuck for 5 generations, diversify
+        if generations_without_improvement >= 5:
+            quantum_population = diversify_population(quantum_population)
+            generations_without_improvement = 0 # Reset counter after diversifying
         
-        quantum_population = update_population_hqga(quantum_population, current_best_solution)
+        # Evolve population toward the best-ever solution using the new adaptive rate
+        quantum_population = update_population_hqga(quantum_population, global_best_solution, current_rotation_rate)
         
     print(f"\nHQGA Finished.")
     return global_best_fitness
 
-# --- 3. CLASSICAL GENETIC ALGORITHM SECTION (MODIFIED) ---
-
-# Standard parameters, but selection/crossover logic is modified
 MUTATION_RATE = 0.02
 CROSSOVER_RATE = 0.8
 
@@ -184,7 +228,6 @@ def run_classical_ga_simulation(crop_simulator, hqga_final_score):
     print(f"\nClassical GA Finished.")
     return global_best_fitness
 
-# --- 4. MAIN BENCHMARK EXECUTION ---
 
 if __name__ == "__main__":
     # Initialize the simulation engine once
