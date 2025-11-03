@@ -102,7 +102,7 @@ class CropPerformanceSimulator:
         total_adjusted_yield = 0
         actual_scenarios_run = 0
 
-        # 3. Apply stress effects based on weather
+        # 3. Fitness testing
         for _, weather_day in scenarios.iterrows():
             adjusted_yield = base_yield
 
